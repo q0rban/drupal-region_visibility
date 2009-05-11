@@ -1,0 +1,69 @@
+<?php
+// $Id$
+
+/**
+ * @file
+ * Scaffolding example module's install and uninstall code.
+ */
+
+/**
+ * Implementation of hook_install().
+ */
+function region_visibility_install() {
+  drupal_install_schema('region_visibility');
+}
+
+/**
+ * Implementation of hook_schema().
+ */
+function region_visibility_schema() {
+  $schema['region_visibility'] = array(
+    'description' => t('Stores page specific visibility settings for regions.'),
+    'fields' => array(
+      'rid' => array(
+        'type' => 'serial',
+        'not null' => TRUE,
+        'description' => 'Primary Key: Unique region ID.',
+      ),
+      'theme_key' => array(
+        'type' => 'varchar',
+        'length' => 64,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'The theme under which the block settings apply.',
+      ),
+      'region' => array(
+        'type' => 'varchar',
+        'length' => 64,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'Theme region within which the block is set.',
+      ),
+      'visibility' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'size' => 'tiny',
+        'description' => 'Flag to indicate how to show blocks on pages. (0 = Show on all pages except listed pages, 1 = Show only on listed pages, 2 = Use custom PHP code to determine visibility)',
+      ),
+      'pages' => array(
+        'type' => 'text',
+        'not null' => TRUE,
+        'description' => 'Contents of the "Pages" block; contains either a list of paths on which to include/exclude the block or PHP code, depending on "visibility" setting.',
+      ),
+    ),
+    'primary key' => array('rid'),
+    'unique keys' => array(
+      'tr' => array('theme_key', 'region'),
+    ),
+  );
+  return $schema;
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function region_visibility_uninstall() {
+  drupal_uninstall_schema('region_visibility');
+  cache_clear_all('region_visibility:*', 'cache', TRUE);
+}

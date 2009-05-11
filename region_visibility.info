@@ -1,0 +1,4 @@
+; $Id$
+name = Region Visibility
+description = Set page specific visibility settings for regions
+core = 6.x

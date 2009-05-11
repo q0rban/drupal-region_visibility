@@ -1,0 +1,257 @@
+<?php
+// $Id$
+
+/**
+ * @file
+ *   Sets page specific visibility settings for regions.
+ */
+
+/**
+ * Implementation of hook_menu().
+ */
+function region_visibility_menu() {
+  $items = array();
+
+  $items['admin/settings/region_visibility'] = array(
+    'title' => 'Region visibility',
+    'description' => 'Configure region visibility',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('region_visibility_theme_form', 3),
+    'access arguments' => array('administer region manager'),
+  );
+
+  $first = TRUE;
+  foreach(list_themes() as $theme) {
+    if ($theme->status) {
+      if ($first) {
+        $items['admin/settings/region_visibility/'. $theme->name] = array(
+          'title' => $theme->info['name'],
+          'type' => MENU_DEFAULT_LOCAL_TASK,
+          'weight' => -10,
+        );
+        $items['admin/settings/region_visibility']['page arguments'] = array('region_visibility_theme_form', $theme->name);
+        $first = FALSE;
+      }
+      else {
+        $items['admin/settings/region_visibility/'. $theme->name] = array(
+          'title' => $theme->info['name'],
+          'description' => 'Configure region visibility',
+          'page callback' => 'drupal_get_form',
+          'page arguments' => array('region_visibility_theme_form', 3),
+          'access arguments' => array('administer region manager'),
+          'type' => MENU_LOCAL_TASK,
+        );
+      }
+    }
+  }
+
+  return $items;
+}
+
+/**
+ * Implementation of hook_perm().
+ */
+function region_visibility_perm() {
+  return array('administer region visibility', 'view all regions', 'use PHP for region visibility');
+}
+
+/**
+ * Implementation of hook_theme_registry_alter().
+ */
+function region_visibility_theme_registry_alter(&$theme_registry) {
+  if (isset($theme_registry['page'])) {
+    // If region_visibility's preprocess function is there already, remove it.
+    if ($key = array_search('region_visibility_preprocess_page', $theme_registry['page']['preprocess functions'])) {
+      unset($theme_registry['page']['preprocess functions'][$key]);
+    }
+    // Now tack it on at the end so it runs after everything else.
+    $theme_registry['page']['preprocess functions'][] = 'region_visibility_preprocess_page';
+  } 
+}
+
+/**
+ * Implementation of hook_preprocess_page().
+ */
+function region_visibility_preprocess_page(&$vars) {
+  if (!user_access('view all regions')) {
+    $regions = array();
+    global $theme_key;
+
+    if (empty($theme_key)) {
+      init_theme();
+    }
+
+    $records = region_visibility_regions_load($theme_key);
+
+    if (!empty($records)) {
+      foreach(array_keys(system_region_list($theme_key)) as $region) {
+        if ($vars[$region]) {
+          $record = $records[$region];
+          // Match path if necessary
+          if ($record['pages']) {
+            if ($record['visibility'] < 2) {
+              $path = drupal_get_path_alias($_GET['q']);
+              // Compare with the internal and path alias (if any).
+              $page_match = drupal_match_path($path, $record['pages']);
+              if ($path != $_GET['q']) {
+                $page_match = $page_match || drupal_match_path($_GET['q'], $record['pages']);
+              }
+              // When $record['visibility'] has a value of 0, the region is displayed on
+              // all pages except those listed in $record['pages']. When set to 1, it
+              // is displayed only on those pages listed in $record['pages'].
+              $page_match = !($record['visibility'] xor $page_match);
+            }
+            else {
+              $page_match = drupal_eval($record['pages']);
+            }
+          }
+          else {
+            $page_match = TRUE;
+          }
+
+          if (!$page_match) {
+            unset($vars[$region]);
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Configure the visibility settings for all regions of a theme.
+ */
+function region_visibility_theme_form(&$form_state, $theme_key) {
+  $form = array();
+
+  $records = region_visibility_regions_load($theme_key, TRUE);
+
+  $form['regions'] = array('#tree' => TRUE);
+
+  foreach(system_region_list($theme_key) as $region => $name) {
+    $form['regions'][$region] = array(
+      '#type' => 'fieldset',
+      '#title' => t($name),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+      '#tree' => TRUE,
+    );
+
+    // Set the rid, if there is one.
+    if ($records[$region]['rid']) {
+      $form['regions'][$region]['rid'] = array('#type' => 'value', '#value' => $records[$region]['rid']);
+    }
+
+    $form['regions'][$region]['region'] = array('#type' => 'value', '#value' => $region);
+    $form['regions'][$region]['theme_key'] = array('#type' => 'value', '#value' => $theme_key);
+
+    // Set up options and description.
+    $options = array(t('Show on every page except the listed pages.'), t('Show on only the listed pages.'));
+    $description = t("Enter one page per line as Drupal paths. The '*' character is a wildcard. Example paths are %blog for the blog page and %blog-wildcard for every personal blog. %front is the front page.", array('%blog' => 'blog', '%blog-wildcard' => 'blog/*', '%front' => '<front>'));
+
+    // Add the PHP specific stuff, if user has access.
+    if (user_access('use PHP for region visibility')) {
+      $options[] = t('Show if the following PHP code returns <code>TRUE</code> (PHP-mode, experts only).');
+      $description .= ' '. t('If the PHP-mode is chosen, enter PHP code between %php. Note that executing incorrect PHP-code can break your Drupal site.', array('%php' => '<?php ?>'));
+    }
+    $form['regions'][$region]['visibility'] = array(
+      '#type' => 'radios',
+      '#title' => t('Show region on specific pages'),
+      '#options' => $options,
+      '#default_value' => $records[$region]['visibility'] ? $records[$region]['visibility'] : 0,
+    );
+    $form['regions'][$region]['pages'] = array(
+      '#type' => 'textarea',
+      '#title' => t('Pages'),
+      '#default_value' => $records[$region]['pages'],
+      '#description' => $description,
+    );
+  }
+
+  $form['submit'] = array('#type' => 'submit', '#value' => t('Submit'));
+
+  return $form;
+}
+
+/**
+ * Submit handler.
+ */
+function region_visibility_theme_form_submit($form, &$form_state) {
+  $regions = $form_state['values']['regions'];
+
+  foreach($regions as $region) {
+    $theme_key = $region['theme_key'];
+    $region['pages'] = trim($region['pages']);
+    region_visibility_record_save($region);
+  }
+  cache_clear_all('region_visibility:'. $theme_key, 'cache', TRUE);
+
+  drupal_set_message(t('The region visibility settings have been saved.'));
+}
+
+/**
+ * Loader function for individual records.
+ *
+ * @param $theme_key
+ *   A string containing the theme key.
+ * @return
+ *   An array of regions, keyed by region name.
+ */
+function region_visibility_regions_load($theme_key, $reset = FALSE) {
+  static $records = array();
+
+  $cache_key = 'region_visibility:'. $theme_key;
+
+  if ($reset) {
+    cache_clear_all($cache_key, 'cache');
+  }
+
+  if (!empty($records)) {
+    return $records;
+  }
+
+  if (($cache = cache_get($cache_key, 'cache') && is_array($cache->data))) {
+    $records = $cache->data;
+  }
+  else {
+    $sql = "SELECT * FROM {region_visibility} WHERE theme_key = '%s'";
+    $result = db_query($sql, $theme_key);
+  
+    while ($record = db_fetch_array($result)) {
+      $records[$record['region']] = $record;
+    }
+    cache_set($cache_key, $records);
+  }
+
+  return $records;
+}
+
+/**
+ * Inserts a new record, or updates an existing one.
+ *
+ * @param $record
+ *   A record to be saved. If $record['record_id'] is set, the record will be updated.
+ *   Otherwise, a new record will be inserted into the database.
+ * @return
+ *   The saved record, with its ID set.
+ */
+function region_visibility_record_save($record) {
+  if (isset($record['rid'])) {
+    drupal_write_record('region_visibility', $record, 'rid');
+  }
+  else {
+    drupal_write_record('region_visibility', $record);
+  }
+  return $record;
+}
+
+/**
+ * Deletes a record, given its unique ID.
+ *
+ * @param $record_id
+ *   An int containing the ID of a record.
+ */
+function region_visibility_record_delete($record_id) {
+  $sql = 'DELETE FROM {region_visibility} WHERE record_id = %d';
+  db_query($sql, $record_id);
+}
